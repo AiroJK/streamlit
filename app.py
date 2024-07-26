@@ -4,7 +4,7 @@ import requests
 import os
 
 # API 키를 환경 변수에서 가져오거나 기본값을 설정
-api_key = os.environ.get('API_KEY') or '150dae67776e945e520ac70e5ecaac21'
+api_key = '150dae67776e945e520ac70e5ecaac21'
 
 # 페이지 제목과 설명
 st.title("Excel to Kakao Map")
