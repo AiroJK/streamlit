@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Excel2Kakaomap</title>
+    <!-- XLSX 라이브러리 포함 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.16.9/xlsx.full.min.js"></script>
+    <!-- 카카오맵 API -->
+    <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=150dae67776e945e520ac70e5ecaac21&libraries=services"></script>
+    
+    <style>
+        /* 맵을 표시할 div의 스타일 */
+        #map {
+            width: 100%;
+            height: 600px;
+        }
+
+        /* 테이블 스타일 */
+        #excelDataTable {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            display: none; /* 초기에는 테이블 숨김 */
+        }
+        #excelDataTable th, #excelDataTable td {
+            border: 1px solid #ddd;
+            padding: 8px;
+        }
+        #excelDataTable th {
+            background-color: #f2f2f2;
+            text-align: center;
+        }
+        #excelDataTable td:nth-child(1),
+        #excelDataTable td:nth-child(4),
+        #excelDataTable th:nth-child(1),
+        #excelDataTable th:nth-child(4) {
+            text-align: center;
+        }
+
+        /* 행 클릭 스타일 */
+        #excelDataTable tr {
+            cursor: pointer;
+        }
+        #excelDataTable tr.selected {
+            background-color: #f0f0f0; /* 선택된 행의 배경색 */
+        }
+    </style>
+</head>
+<body>
+    <h2>Excel2Kakaomap</h2>
+    
+    <!-- Excel 파일 선택을 위한 입력 필드 -->
+    <input type="file" id="excelFileInput" accept=".xlsx, .xls" style="display: none;">
+    <button onclick="selectExcelFile()">Excel 파일 선택</button>
+    <p>※ Excel 파일 A열은 주소지 명칭, B열은 주소</p>
+    
+    <!-- 맵을 표시할 div -->
+    <div id="map"></div>
+
+    <!-- 엑셀 데이터 테이블 -->
+    <table id="excelDataTable">
+        <thead>
+            <tr>
+                <th>Index</th>
+                <th>Title</th>
+                <th>Address</th>
+                <th>Link</th>
+            </tr>
+        </thead>
+        <tbody id="excelDataBody">
+            <!-- 여기에 데이터 추가됨 -->
+        </tbody>
+    </table>
+
+    <script>
+        // 파일 선택 후 처리
+        document.getElementById('excelFileInput').addEventListener('change', function(e) {
+            var file = e.target.files[0];
+
+            if (!file) return;
+
+            // FileReader 객체 생성
+            var reader = new FileReader();
+
+            // 엑셀 파일 읽기
+            reader.onload = function(e) {
+                var data = new Uint8Array(e.target.result);
+                var workbook = XLSX.read(data, { type: 'array' });
+
+                // 첫 번째 시트 가져오기
+                var sheetName = workbook.SheetNames[0];
+                var sheet = workbook.Sheets[sheetName];
+
+                // 시트 데이터 파싱
+                var jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+                // JSON 데이터로부터 위치 정보 추출
+                var positions = [];
+                var geocoder = new kakao.maps.services.Geocoder();
+
+                // 주소를 위도 경도로 변환하여 positions 배열에 추가
+                function processAddresses() {
+                    var promises = []; // 비동기 처리를 위한 프로미스 배열
+
+                    // 인덱스를 사용하여 순서를 보장하도록 수정
+                    jsonData.forEach(function(row, index) {
+                        if (index === 0) return; // 헤더는 건너뜁니다
+                        var title = row[0]; // 엑셀의 첫 번째 열 데이터를 제목으로 사용
+                        var address = row[1]; // 엑셀의 두 번째 열 데이터를 주소로 사용
+
+                        var promise = new Promise(function(resolve, reject) {
+                            getAddressCoordinates(address, function(latitude, longitude) {
+                                if (latitude && longitude) {
+                                    var latlng = new kakao.maps.LatLng(latitude, longitude);
+                                    positions[index - 1] = { title: title, latlng: latlng }; // 인덱스를 기준으로 순서 맞춤
+                                    addMarker(map, title, address, latlng);
+                                    appendToTable(title, address, index, latitude, longitude); // 인덱스 전달
+                                    resolve(); // 비동기 처리 완료 후 프로미스 resolve 호출
+                                } else {
+                                    console.log('위도와 경도를 찾을 수 없습니다: ' + address);
+                                    reject(); // 에러 처리
+                                }
+                            });
+                        });
+
+                        promises.push(promise);
+                    });
+
+                    // 모든 주소 처리 완료 후 맵의 중심과 레벨 설정
+                    Promise.all(promises).then(function() {
+                        var bounds = new kakao.maps.LatLngBounds();
+                        positions.forEach(function(position) {
+                            bounds.extend(position.latlng);
+                        });
+                        map.setBounds(bounds); // 모든 마커가 보이도록 맵의 bounds 설정
+
+                        // 테이블 보이기
+                        document.getElementById('excelDataTable').style.display = 'table';
+                    }).catch(function(error) {
+                        console.error('주소 변환 중 오류가 발생했습니다.', error);
+                    });
+                }
+
+                // 테이블에 데이터 추가 함수
+                function appendToTable(title, address, index, latitude, longitude) {
+
+                    var tableBody = document.getElementById('excelDataBody');
+                    var newRow = document.createElement('tr');
+                    var link = 'https://map.kakao.com/link/search/' + encodeURIComponent(address);
+
+                    newRow.innerHTML = '<td>' + index + '</td><td>' + title + '</td><td>' + address + '</td><td><a href="' + link + '" target="_blank">Link</a></td>';
+                    // 데이터 속성에 마커의 위치 정보를 추가
+                    newRow.dataset.latitude = latitude;
+                    newRow.dataset.longitude = longitude;
+
+                    // 테이블의 모든 행을 현재의 테이블 바디에서 추출합니다.
+                    var rows = tableBody.getElementsByTagName('tr');
+
+                    tableBody.appendChild(newRow);
+                    sortTable();
+                }
+
+                function sortTable(){
+                    var tableBody = document.getElementById('excelDataBody');
+                    var rowData = tableBody.getElementsByTagName('tr');   
+                    for(var i = 0; i < rowData.length - 1; i++){
+                        for(var j = 0; j < rowData.length - (i + 1); j++){
+                            if(Number(rowData.item(j).getElementsByTagName('td').item(0).innerHTML.replace(/[^0-9\.]+/g, "")) > Number(rowData.item(j+1).getElementsByTagName('td').item(0).innerHTML.replace(/[^0-9\.]+/g, ""))){
+                                tableBody.insertBefore(rowData.item(j+1),rowData.item(j));
+                            }
+                        }
+                    }
+                }
+
+                // 주소를 위도 경도로 변환하는 함수
+                function getAddressCoordinates(address, callback) {
+                    geocoder.addressSearch(address, function(result, status) {
+                        if (status === kakao.maps.services.Status.OK) {
+                            callback(result[0].y, result[0].x);
+                        } else {
+                            console.log('주소를 변환하는 데 문제가 발생했습니다.');
+                            callback(null, null);
+                        }
+                    });
+                }
+
+                // 마커 추가 함수
+                function addMarker(map, title, address, latlng) {
+                    var markerImage = new kakao.maps.MarkerImage("https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/markerStar.png", new kakao.maps.Size(24, 35));
+                    var marker = new kakao.maps.Marker({
+                        map: map,
+                        position: latlng,
+                        title: title,
+                        image: markerImage
+                    });
+                    // 마커에 표시할 인포윈도우를 생성합니다 
+                    var infowindow = new kakao.maps.InfoWindow({
+                        content: title + '<br>' + address // 인포윈도우에 표시할 내용
+                    });
+
+                    // 마커에 이벤트를 등록하는 함수 만들고 즉시 호출하여 클로저를 만듭니다
+                    // 클로저를 만들어 주지 않으면 마지막 마커에만 이벤트가 등록됩니다
+                    (function(marker, infowindow) {
+                        // 마커에 mouseover 이벤트를 등록하고 마우스 오버 시 인포윈도우를 표시합니다 
+                        kakao.maps.event.addListener(marker, 'mouseover', function() {
+                            infowindow.open(map, marker);
+                        });
+
+                        // 마커에 mouseout 이벤트를 등록하고 마우스 아웃 시 인포윈도우를 닫습니다
+                        kakao.maps.event.addListener(marker, 'mouseout', function() {
+                            infowindow.close();
+                        });
+                    })(marker, infowindow);
+                }
+
+                // 맵을 생성하고 주소 처리
+                var mapContainer = document.getElementById('map');
+                var mapOption = {
+                    center: new kakao.maps.LatLng(37.566826, 126.9786567), // 서울시청을 중심으로 초기 설정
+                    level: 7 // 초기 확대 레벨
+                };
+                map = new kakao.maps.Map(mapContainer, mapOption); // 전역 변수 map에 할당
+
+                // 맵 보이기
+                mapContainer.style.display = 'block';
+
+                // 주소 처리 시작
+                processAddresses();
+
+            };
+
+            // 파일 읽기 시작
+            reader.readAsArrayBuffer(file);
+        });
+
+        // 행 클릭 시 지도 중심 이동
+        document.getElementById('excelDataBody').addEventListener('click', function(e) {
+            var target = e.target.closest('tr'); // 클릭된 행
+
+            if (target) {
+                var latitude = parseFloat(target.dataset.latitude);
+                var longitude = parseFloat(target.dataset.longitude);
+
+                if (!isNaN(latitude) && !isNaN(longitude)) {
+                    var latlng = new kakao.maps.LatLng(latitude, longitude);
+                    map.setCenter(latlng); // 지도의 중심을 업데이트
+                    highlightRow(target); // 선택된 행 강조
+                }
+            }
+        });
+
+        // 선택된 행 강조
+        function highlightRow(selectedRow) {
+            var rows = document.querySelectorAll('#excelDataBody tr');
+            rows.forEach(function(row) {
+                row.classList.remove('selected');
+            });
+            selectedRow.classList.add('selected');
+        }
+
+        // Excel 파일 선택 버튼 클릭 처리
+        function selectExcelFile() {
+            // 파일 선택 input 요소 클릭
+            document.getElementById('excelFileInput').click();
+        }
+
+    </script>
+</body>
+</html>
