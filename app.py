@@ -11,9 +11,6 @@ st.title("Excel to Kakao Map")
 st.markdown("## 엑셀 파일을 업로드하여 카카오 맵에 표시합니다.")
 st.markdown("※ Excel 파일 A열은 주소지 명칭, B열은 주소")
 
-# API 키 표시
-st.markdown(f"**API Key**: {api_key}")
-
 # 엑셀 파일 업로드
 uploaded_file = st.file_uploader("Upload your Excel file", type=["xlsx"])
 
